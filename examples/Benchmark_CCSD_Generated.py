@@ -1,8 +1,7 @@
 """Benchmark CCSD residuals emitted by AutoGraph against NuLattice CCSD.
 
-The function below is the standalone ``--format=einsum`` output generated
-from AutoGraph/Examples/CCSD.in. It intentionally lives only in this example:
-the reusable generated-backend implementation remains on ``autodiags``.
+The function below is the standalone ``--format=einsum`` output generated from AutoGraph/Examples/CCSD.in.
+(See https://github.com/francesco-marino/AutoGraph.git repository.)
 """
 
 from copy import deepcopy
@@ -80,7 +79,7 @@ def generated_ccsd_residuals(f_hh, f_ph, f_pp, t1, t2, v_hhhh, v_phhh, v_phph, v
 
 
 def solve_generated(fock_mats, two_body_int, eps=1e-10, max_steps=500, mixing=0.5):
-    """Solve CCSD with the standalone generated residuals and Jacobi updates."""
+    """Solve CCSD with the standalone generated residuals and linear mixing."""
     f_pp, f_ph, f_hh = fock_mats
     v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh = two_body_int
     t1 = ccm.t1Init(f_ph, f_pp, f_hh, 0)
@@ -107,7 +106,7 @@ def solve_generated(fock_mats, two_body_int, eps=1e-10, max_steps=500, mixing=0.
 
 
 def dense_two_body_blocks(fock_mats, two_body_int):
-    """Materialize the sparse pppp and ppph blocks used by the example."""
+    """Prepares dense pppp and ppph blocks from corresponding sparse structures."""
     f_pp, _, f_hh = fock_mats
     pnum, hnum = f_pp.shape[0], f_hh.shape[0]
     v_pppp_sparse, v_ppph_sparse, *remaining = two_body_int
@@ -122,9 +121,21 @@ def dense_two_body_blocks(fock_mats, two_body_int):
 
 
 def main():
+    
+    #
+    # Same parameters as Example_CCSD.py
+    #
+    
+    #Defining the lattice, here, 2x2x2 lattice with lattice spacing of 2.5 fm
     this_l, lattice_spacing = 2, 2.5
+    
+    #two-body contacts
+    vT1 = -9.0; vS1 = -9.0
+    #three-body contact
+    w3  = 6.0
+       
     reference_energy, fock_mats, two_body_int = ccm.get_norm_ord_int(
-        this_l, ref.ref_16O_gs, -9.0, -9.0, 6.0, sparse=True
+        this_l, ref.ref_16O_gs, vT1, vS1, w3, sparse=True
     )
     two_body_int = dense_two_body_blocks(fock_mats, two_body_int)
 
@@ -134,6 +145,7 @@ def main():
         maxSteps=500, max_diis=10, mixing=0.5, sparse=False,
     )
     reference_time = perf_counter() - start
+    
     start = perf_counter()
     generated = solve_generated(deepcopy(fock_mats), deepcopy(two_body_int))
     generated_time = perf_counter() - start
@@ -148,6 +160,7 @@ def main():
     np.testing.assert_allclose(corr_gen, corr_ref, rtol=1e-8, atol=1e-8)
     np.testing.assert_allclose(t1_gen, t1_ref, rtol=1e-7, atol=1e-8)
     np.testing.assert_allclose(t2_gen, t2_ref, rtol=1e-7, atol=1e-8)
+    
 if __name__ == "__main__":
     main()
 
