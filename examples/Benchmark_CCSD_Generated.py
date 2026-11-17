@@ -78,7 +78,7 @@ def generated_ccsd_residuals(f_hh, f_ph, f_pp, t1, t2, v_hhhh, v_phhh, v_phph, v
 
 
 
-def solve_generated(fock_mats, two_body_int, eps=1e-10, max_steps=500, mixing=0.5):
+def solve_generated(fock_mats, two_body_int, eps=1e-10, max_steps=500, mixing=0.4):
     """Solve CCSD with the standalone generated residuals and linear mixing."""
     f_pp, f_ph, f_hh = fock_mats
     v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh = two_body_int
@@ -96,9 +96,11 @@ def solve_generated(fock_mats, two_body_int, eps=1e-10, max_steps=500, mixing=0.
             f_hh, f_ph, f_pp, t1, t2,
             v_hhhh, v_phhh, v_phph, v_pphh, v_ppph, v_pppp,
         )
+        
         t1 = mixing * t1 + (1.0 - mixing) * (t1 + residual_t1 / denom_t1)
         t2 = mixing * t2 + (1.0 - mixing) * (t2 + residual_t2 / denom_t2)
         energy = ccm.ccsd_energy(f_ph, v_pphh, t2, t1)
+
         if abs(energy - previous_energy) / abs(energy) < eps:
             return energy, t1, t2, iteration
         previous_energy = energy
