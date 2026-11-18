@@ -62,7 +62,6 @@ def get_ccsdt_residuals(
     O_ph = np.zeros_like(t1)
     O_pphh = np.zeros_like(t2)
     pnum,hnum = O_ph.shape
-    O_ppphhh = np.zeros( (pnum,pnum,pnum, hnum,hnum,hnum) )
 
     O_ph += contract('ai -> ai', f_ph)
     O_ph += contract('bj, abij -> ai', np.conj(f_ph), t2)
@@ -120,7 +119,9 @@ def get_ccsdt_residuals(
         O_pphh += 0.5 * pAB(contract('cdbk, acdijk -> abij', np.conj(v_ppph), t3))
         O_pphh += -0.5 * pIJ(contract('cikl, abcjkl -> abij', np.conj(v_phhh), t3))
     
+    O_ppphhh = None
     if need_t3:
+        O_ppphhh = np.zeros( (pnum,pnum,pnum, hnum,hnum,hnum) )
         O_ppphhh += pC_AB(contract('cd, abdijk -> abcijk', f_pp, t3))
         O_ppphhh += -pI_JK(contract('li, abcjkl -> abcijk', f_hh, t3))
         O_ppphhh += pC_AB(pK_IJ(contract('dl, cdij, abkl -> abcijk', np.conj(f_ph), t2, t2)))
@@ -217,7 +218,7 @@ def solve_ccsdt(fock_mats, two_body_int,
         energy = ccm.ccsd_energy(f_ph, v_pphh, t2, t1)
 
         if verbose:
-            tmp_str = f"iteration={iteration}   correlation energy={energy:.8f}"
+            tmp_str = f"iteration={iteration}   correlation energy [a.u.]={energy:.8f}"
             print (tmp_str)
 
         rel_diff = abs(energy - previous_energy) / abs(energy)
@@ -243,36 +244,41 @@ def dense_two_body_blocks(fock_mats, two_body_int):
     return [v_pppp, v_ppph, *remaining]
 
 
-def main():
+def main(truncation = "ccsd"):
     
     #
-    # Same parameters as Example_CCSD.py
+    # Same parameters as Example_FCI.py
     #
 
-    this_l, lattice_spacing = 2, 2.5
-    vT1 = -9.0
-    vS1 = -9.0
-    w3  = 6.0
+    this_l = 3
+    lattice_spacing = 2.0
+    
+    vT1 = -8.0
+    vS1 = -8.0
+    w3  = 5.5
 
-    truncation = "ccsdt"
+    nucleus = ref.ref_3H_gs     # ref.ref_16O_gs
 
-    eps = 1e-10 if truncation=="ccsd" else 1e-4
+    phys_unit = lat.phys_unit(lattice_spacing)
+    eps = 1e-10 if truncation=="ccsd" else 1e-3
        
     reference_energy, fock_mats, two_body_int = ccm.get_norm_ord_int(
-        this_l, ref.ref_16O_gs, vT1, vS1, w3, sparse=True
+        this_l, nucleus, vT1, vS1, w3, sparse=True
     )
     two_body_int = dense_two_body_blocks(fock_mats, two_body_int)
 
     print (f"Coupled-cluster truncation: {truncation}")    
+    print (f"Reference energy : {reference_energy*phys_unit:.8f}")
     start = perf_counter()
 
     ccsdt = solve_ccsdt(deepcopy(fock_mats), deepcopy(two_body_int), truncation=truncation, verbose=True, mixing=0.4)
     corr_gen, t1_out, t2_out, t3_out, iterations_count = ccsdt
     cc_time = perf_counter() - start
 
-    unit = lat.phys_unit(lattice_spacing)
-    print(f"AutoGraph: {cc_time:.3f} s, {iterations_count} iterations, correlation = {corr_gen}, total = {(corr_gen + reference_energy) * unit}")
+    print(f"AutoGraph: {cc_time:.3f} s, {iterations_count} iterations, correlation = {corr_gen}, total = {(corr_gen + reference_energy) * phys_unit}")
+    
     
 if __name__ == "__main__":
-    main()
+    
+    main("ccsdt")
 
