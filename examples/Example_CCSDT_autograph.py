@@ -14,6 +14,8 @@ sys.path.append(str(pathlib.Path(__file__).parent / ".."))
 import NuLattice.CCM.coupled_cluster as ccm
 import NuLattice.lattice as lat
 import NuLattice.references as ref
+import NuLattice.FCI.few_body_diagonalization as fbd
+from scipy.sparse.linalg import eigsh
 
 # --- Permutation (antisymmetrizer) operators for the einsum equations ---
 # Doubles axes: (a, b, i, j).  Triples axes: (a, b, c, i, j, k).
@@ -183,9 +185,11 @@ def solve_ccsdt(fock_mats, two_body_int,
     mixing=0.6, 
     mixing_t3=0.7,
     truncation="ccsdt",
+    denom_shift=0.0,    # Constant shift to denominators
     verbose=True
     ):
-    """Solve CCSD with the standalone ccsdt residuals and linear mixing."""
+    """Solve CCSD with the standalone ccsdt residuals and linear mixing.
+    """
     f_pp, f_ph, f_hh = fock_mats
     v_pppp, v_ppph, v_pphh, v_phph, v_phhh, v_hhhh = two_body_int
     t1 = ccm.t1Init(f_ph, f_pp, f_hh, 0)
@@ -198,9 +202,9 @@ def solve_ccsdt(fock_mats, two_body_int,
     hh_ens  = np.add.outer(np.diag(f_hh), np.diag(f_hh))
     hhh_ens = np.add.outer(hh_ens, np.diag(f_hh))
 
-    denom_t1 = np.add.outer(-np.diag(f_pp), np.diag(f_hh))
-    denom_t2 = np.add.outer(-pp_ens,  hh_ens, )
-    denom_t3 = np.add.outer(-ppp_ens, hhh_ens,)
+    denom_t1 = np.add.outer(-np.diag(f_pp), np.diag(f_hh)) - denom_shift
+    denom_t2 = np.add.outer(-pp_ens,  hh_ens, )            - denom_shift
+    denom_t3 = np.add.outer(-ppp_ens, hhh_ens,)            - denom_shift
     previous_energy = ccm.ccsd_energy(f_ph, v_pphh, t2, t1)
 
     for iteration in range(1, max_steps + 1):
@@ -244,41 +248,80 @@ def dense_two_body_blocks(fock_mats, two_body_int):
     return [v_pppp, v_ppph, *remaining]
 
 
-def main(truncation = "ccsd"):
-    
-    #
-    # Same parameters as Example_FCI.py
-    #
+def fci_energy(
+    this_l, nucleus, 
+    vT1, vS1, w3=0.0, 
+    k_eig=2
+    ):
+    """Exact (FCI) ground-state energy [a.u.] for ``nucleus`` on a lattice.
+    [a.u.] -> Remind to multiply by physical units to get results in MeV.
 
-    this_l = 3
+    A thin wrapper over ``examples/Example_FCI.py``. The total isospin/spin projections are derived
+    from the reference state, so the caller only passes the nucleus and the LECs.
+
+    :return: (ground-state energy [a.u.], many-body matrix dimension)
+    """
+    numpart  = len(nucleus)
+    total_tz = 2 * sum(s[3] for s in nucleus) - numpart   # twice z-isospin
+    total_sz = 2 * sum(s[4] for s in nucleus) - numpart   # twice z-spin
+    
+    basis    = lat.get_sp_basis(this_l)
+    nstat    = len(basis)
+    lattice  = lat.get_lattice(this_l)
+    
+    lookup   = fbd.get_many_body_states(basis, numpart, total_tz=total_tz, total_sz=total_sz)
+    H  = fbd.get_csr_matrix_scalar_op(lookup, lat.Tkin(lattice, this_l), nstat)
+    H += fbd.get_csr_matrix_scalar_op(lookup, lat.contacts(vT1, vS1, lattice, this_l), nstat)
+    if w3 != 0.0:
+        H += fbd.get_csr_matrix_scalar_op(lookup, lat.NNNcontact(w3, lattice, this_l), nstat)
+    vals, _ = eigsh(H, k=k_eig, which='SA')
+    
+    return float(np.sort(vals)[0]), len(lookup)
+
+
+
+def main(truncation = "ccsdt"):
+    
+    this_l = 2
     lattice_spacing = 2.0
     
     vT1 = -8.0
     vS1 = -8.0
-    w3  = 5.5
+    w3  = 0.
 
-    nucleus = ref.ref_3H_gs     # ref.ref_16O_gs
+    # A=4 (He4) is gapped and converges stably.
+    nucleus = ref.ref_4He_gs
 
     phys_unit = lat.phys_unit(lattice_spacing)
-    eps = 1e-10 if truncation=="ccsd" else 1e-3
-       
+    eps = 1e-8 if truncation=="ccsd" else 1e-4
+
     reference_energy, fock_mats, two_body_int = ccm.get_norm_ord_int(
         this_l, nucleus, vT1, vS1, w3, sparse=True
     )
     two_body_int = dense_two_body_blocks(fock_mats, two_body_int)
 
-    print (f"Coupled-cluster truncation: {truncation}")    
+    print (f"Coupled-cluster truncation: {truncation}")
     print (f"Reference energy : {reference_energy*phys_unit:.8f}")
     start = perf_counter()
 
-    ccsdt = solve_ccsdt(deepcopy(fock_mats), deepcopy(two_body_int), truncation=truncation, verbose=True, mixing=0.4)
-    corr_gen, t1_out, t2_out, t3_out, iterations_count = ccsdt
+    ccsdt = solve_ccsdt(deepcopy(fock_mats), deepcopy(two_body_int),
+                        truncation=truncation, verbose=True, eps=eps, mixing=0.4)
+    
+    cc_corr, t1_out, t2_out, t3_out, iterations_count = ccsdt
     cc_time = perf_counter() - start
+    e_cc = cc_corr + reference_energy
+    
+    print(f"\nnucleus A={len(nucleus)}   L={this_l}   truncation={truncation}")
+    print(f"AutoGraph CCSDT: {cc_time:.3f} s, {iterations_count} iterations")
+    print(f"  CC    total = {e_cc:.8f} a.u.  ({e_cc*phys_unit:.6f} MeV)")
 
-    print(f"AutoGraph: {cc_time:.3f} s, {iterations_count} iterations, correlation = {corr_gen}, total = {(corr_gen + reference_energy) * phys_unit}")
-    
-    
+    # Independent check: exact diagonalization (FCI) of the same Hamiltonian.
+    e_fci, dim = fci_energy(this_l, nucleus, vT1, vS1, w3)
+    print(f"  FCI   total = {e_fci:.8f} a.u.  ({e_fci*phys_unit:.6f} MeV, dim={dim})")
+    print(f"  |CC - FCI|/|FCI| = {abs(e_cc - e_fci)/abs(e_fci)*100:.3e} %")
+
+
 if __name__ == "__main__":
-    
+
     main("ccsdt")
 
